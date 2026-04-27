@@ -65,11 +65,12 @@ function getLM(dtype) {
       AutoModelForCausalLM.from_pretrained(SVARA_REPO, {
         dtype,
         device: "webgpu",
-        // Required for any model with external .onnx_data sidecars (q4f16
-        // ~2GB, q8 ~4GB sharded). Without it transformers.js fetches the
-        // graph but never mounts the data file -> Module.MountedFiles is
-        // not available.
-        use_external_data_format: true,
+        // Number of external data chunks to fetch alongside the .onnx graph.
+        // q4f16 is one .onnx_data file; q8 is sharded into 3 chunks
+        // (.onnx_data, _data_1, _data_2) to stay under the ~2 GB browser
+        // ArrayBuffer ceiling. transformers.js v4 accepts a number here per
+        // its types: `false` | `true` (=1) | <number of chunks>.
+        use_external_data_format: dtype === "q8" ? 3 : true,
       }),
     );
   }
