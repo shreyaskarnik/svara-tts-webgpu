@@ -180,6 +180,7 @@ self.addEventListener("message", async (e) => {
       [1, promptIds.length],
     );
 
+    console.log(`[svara] prompt length: ${promptIds.length}, calling generate...`);
     const out = await lm.generate({
       inputs: inputIds,
       max_new_tokens: 2048,
@@ -199,6 +200,9 @@ self.addEventListener("message", async (e) => {
     });
     // out is a Tensor of shape [1, prompt_len + generated_len]
     const allIds = Array.from(out.data, (x) => Number(x));
+    console.log(
+      `[svara] LM output: total ${allIds.length} ids (${allIds.length - promptIds.length} generated). first 8: [${allIds.slice(0, 8)}], last 8: [${allIds.slice(-8)}]`,
+    );
     const audioIds = extractAudioTokens(allIds);
     if (audioIds.length === 0) {
       throw new Error("LM produced no audio tokens; try again or adjust sampling.");
@@ -225,7 +229,19 @@ self.addEventListener("message", async (e) => {
     if (badBands > 0) console.log("[svara] first bad bands:", badPositions);
 
     const pcm = await decodeSnacAll(audioIds);
-    console.log("[svara] decoded PCM samples:", pcm.length, "duration:", (pcm.length / SAMPLE_RATE).toFixed(2), "s");
+    let peak = 0, sumsq = 0;
+    for (let i = 0; i < pcm.length; i++) {
+      const v = Math.abs(pcm[i]);
+      if (v > peak) peak = v;
+      sumsq += pcm[i] * pcm[i];
+    }
+    const rms = Math.sqrt(sumsq / pcm.length);
+    console.log(
+      `[svara] decoded PCM: ${pcm.length} samples (${(pcm.length / SAMPLE_RATE).toFixed(2)}s), peak=${peak.toFixed(4)}, rms=${rms.toFixed(4)}`,
+    );
+    if (peak < 0.01) {
+      console.warn("[svara] PCM is essentially silent -- likely an LM degenerate state. See last-8 token IDs above.");
+    }
     const wav = pcmFloat32ToWav(pcm, SAMPLE_RATE);
     const blob = new Blob([wav], { type: "audio/wav" });
     self.postMessage({
