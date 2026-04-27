@@ -103,41 +103,36 @@ async function decodeSnacAll(audioTokenIds) {
 }
 
 // --- Build Svara prompt -----------------------------------------------------
-//   BOS, SOH, "Voice (Gender): text", EOT, EOH, SOAI, SOS
+// Match mlx_audio/tts/models/llama/llama.py:prepare_input_ids exactly:
+//   [SOH, BOS, "<voice>: <text>" tokens, EOT, EOH]
+// SOH comes before BOS (Orpheus quirk -- the reference relies on the HF
+// tokenizer auto-prepending BOS inside its input_ids, then prepends SOH).
+// We deliberately do NOT append SOAI/SOS here; the LM predicts those itself
+// before emitting audio tokens.
 function buildPrompt(text, voice) {
   const body = tokenizer.encode(`${voice}: ${text}`, {
     add_special_tokens: false,
   });
-  return [
-    tokenizer.bos_token_id,
-    SOH,
-    ...body,
-    EOT,
-    EOH,
-    SOAI,
-    SOS,
-  ];
+  return [SOH, tokenizer.bos_token_id, ...body, EOT, EOH];
 }
 
 // --- Strip non-audio tokens from the LM output ------------------------------
-// LM emits: ...prompt..., SOS, <7 audio bands>×N, EOS.
-// We slice [SOS_index+1, EOS_index) and keep only IDs in [AUDIO_OFFSET, AUDIO_OFFSET + 7*4096).
+// Match mlx_audio/tts/models/llama/llama.py:parse_output exactly:
+//   1) Slice after the LAST SOS (=128257) the LM emitted (model predicts it)
+//   2) Strip EOS (=128258) anywhere in the slice -- DO NOT range-filter,
+//      since dropping a non-audio token shifts the (position % 7) band index
+//      of every subsequent code -> garbled audio mid-clip.
+//   3) Trim to a multiple of 7.
 function extractAudioTokens(allTokenIds) {
-  // Find last SOS occurrence
   let sosIdx = -1;
   for (let i = allTokenIds.length - 1; i >= 0; i--) {
     if (allTokenIds[i] === SOS) { sosIdx = i; break; }
   }
-  let start = sosIdx + 1;
-  let end = allTokenIds.length;
-  // Trim EOS if present
-  if (end > start && allTokenIds[end - 1] === EOS) end -= 1;
   const audio = [];
-  for (let i = start; i < end; i++) {
+  for (let i = sosIdx + 1; i < allTokenIds.length; i++) {
     const t = allTokenIds[i];
-    if (t >= AUDIO_OFFSET && t < AUDIO_OFFSET + 7 * 4096) audio.push(t);
+    if (t !== EOS) audio.push(t);
   }
-  // Trim to a multiple of 7
   const M = audio.length - (audio.length % 7);
   return audio.slice(0, M);
 }
