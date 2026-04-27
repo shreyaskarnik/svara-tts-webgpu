@@ -42,6 +42,10 @@ const tokenizer = await AutoTokenizer.from_pretrained(SVARA_REPO);
 const lm = await AutoModelForCausalLM.from_pretrained(SVARA_REPO, {
   dtype,
   device: "webgpu",
+  // The .onnx graph references model_q4f16.onnx_data (~1.95 GB external
+  // weights). Without this flag transformers.js fetches the graph but
+  // never mounts the data file -> "Module.MountedFiles is not available".
+  use_external_data_format: true,
 });
 
 // SNAC decoder is small (~26 MB at fp16), runs cleanly on WebGPU
