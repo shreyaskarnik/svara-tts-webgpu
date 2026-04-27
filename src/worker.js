@@ -57,10 +57,6 @@ const snacUrl = `https://huggingface.co/${SNAC_REPO}/resolve/main/onnx/decoder_m
 const snacSession = await ort.InferenceSession.create(snacUrl, {
   executionProviders: ["webgpu"],
 });
-// Diagnostic: surface the actual input names so we can confirm our
-// positional [layer_1, layer_2, layer_3] feed matches what ORT expects.
-console.log("[svara] SNAC inputs:", snacSession.inputNames);
-console.log("[svara] SNAC outputs:", snacSession.outputNames);
 
 self.postMessage({ status: "ready" });
 
@@ -180,68 +176,34 @@ self.addEventListener("message", async (e) => {
       [1, promptIds.length],
     );
 
-    console.log(`[svara] prompt length: ${promptIds.length}, calling generate...`);
     const out = await lm.generate({
       inputs: inputIds,
       max_new_tokens: 2048,
       do_sample: true,
-      temperature: 0.75,
+      // The upstream Svara recipe quotes 0.75 with vLLM. We use 0.6 here
+      // because q4f16 quantization noise widens the band-correct logit
+      // distribution; lower temperature tightens code selection back
+      // toward the higher-amplitude codes the bf16 model would have
+      // picked, restoring loudness/clarity in the back half of long
+      // utterances. Bump back to 0.75 once we ship an fp16/q8 variant.
+      temperature: 0.6,
       top_p: 0.9,
       top_k: 40,
-      // NB: rep penalty intentionally disabled. transformers.js applies it
-      // across ALL prior tokens (no context window), which for an audio
-      // token stream progressively penalises naturally-recurring codes
-      // (silence, voiced-region) and yields a clip that gets quieter and
-      // less articulate over time. The MLX reference uses a 20-token
-      // context window so it doesn't see this drift; the upstream Svara
-      // recipe uses 1.1 with vLLM whose impl differs. 1.0 == off.
+      // rep penalty disabled: transformers.js applies it across ALL
+      // prior tokens (no context window), which for an audio token
+      // stream progressively penalises naturally-recurring codes
+      // (silence, voiced-region) and yields a clip that gets quieter
+      // and less articulate over time. The MLX reference uses a 20-
+      // token context window so it doesn't see this drift.
       repetition_penalty: 1.0,
       eos_token_id: EOS,
     });
-    // out is a Tensor of shape [1, prompt_len + generated_len]
     const allIds = Array.from(out.data, (x) => Number(x));
-    console.log(
-      `[svara] LM output: total ${allIds.length} ids (${allIds.length - promptIds.length} generated). first 8: [${allIds.slice(0, 8)}], last 8: [${allIds.slice(-8)}]`,
-    );
     const audioIds = extractAudioTokens(allIds);
     if (audioIds.length === 0) {
       throw new Error("LM produced no audio tokens; try again or adjust sampling.");
     }
-
-    // Diagnostic: how many tokens fell outside their expected band?
-    // For a clean stream every position i should have:
-    //   AUDIO_OFFSET + (i % 7) * 4096 <= token < AUDIO_OFFSET + (i % 7 + 1) * 4096
-    // Mid-clip muffling usually correlates with a cluster of bad bands.
-    let badBands = 0;
-    const badPositions = [];
-    for (let i = 0; i < audioIds.length; i++) {
-      const band = i % 7;
-      const lo = AUDIO_OFFSET + band * 4096;
-      const hi = lo + 4096;
-      if (audioIds[i] < lo || audioIds[i] >= hi) {
-        badBands++;
-        if (badPositions.length < 10) badPositions.push({ i, band, token: audioIds[i] });
-      }
-    }
-    console.log(
-      `[svara] generated ${allIds.length} total ids, ${audioIds.length} audio (${audioIds.length / 7} frames). bad-band count: ${badBands}`,
-    );
-    if (badBands > 0) console.log("[svara] first bad bands:", badPositions);
-
     const pcm = await decodeSnacAll(audioIds);
-    let peak = 0, sumsq = 0;
-    for (let i = 0; i < pcm.length; i++) {
-      const v = Math.abs(pcm[i]);
-      if (v > peak) peak = v;
-      sumsq += pcm[i] * pcm[i];
-    }
-    const rms = Math.sqrt(sumsq / pcm.length);
-    console.log(
-      `[svara] decoded PCM: ${pcm.length} samples (${(pcm.length / SAMPLE_RATE).toFixed(2)}s), peak=${peak.toFixed(4)}, rms=${rms.toFixed(4)}`,
-    );
-    if (peak < 0.01) {
-      console.warn("[svara] PCM is essentially silent -- likely an LM degenerate state. See last-8 token IDs above.");
-    }
     const wav = pcmFloat32ToWav(pcm, SAMPLE_RATE);
     const blob = new Blob([wav], { type: "audio/wav" });
     self.postMessage({
