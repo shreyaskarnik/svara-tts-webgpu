@@ -57,6 +57,10 @@ const snacUrl = `https://huggingface.co/${SNAC_REPO}/resolve/main/onnx/decoder_m
 const snacSession = await ort.InferenceSession.create(snacUrl, {
   executionProviders: ["webgpu"],
 });
+// Diagnostic: surface the actual input names so we can confirm our
+// positional [layer_1, layer_2, layer_3] feed matches what ORT expects.
+console.log("[svara] SNAC inputs:", snacSession.inputNames);
+console.log("[svara] SNAC outputs:", snacSession.outputNames);
 
 self.postMessage({ status: "ready" });
 
@@ -192,7 +196,29 @@ self.addEventListener("message", async (e) => {
     if (audioIds.length === 0) {
       throw new Error("LM produced no audio tokens; try again or adjust sampling.");
     }
+
+    // Diagnostic: how many tokens fell outside their expected band?
+    // For a clean stream every position i should have:
+    //   AUDIO_OFFSET + (i % 7) * 4096 <= token < AUDIO_OFFSET + (i % 7 + 1) * 4096
+    // Mid-clip muffling usually correlates with a cluster of bad bands.
+    let badBands = 0;
+    const badPositions = [];
+    for (let i = 0; i < audioIds.length; i++) {
+      const band = i % 7;
+      const lo = AUDIO_OFFSET + band * 4096;
+      const hi = lo + 4096;
+      if (audioIds[i] < lo || audioIds[i] >= hi) {
+        badBands++;
+        if (badPositions.length < 10) badPositions.push({ i, band, token: audioIds[i] });
+      }
+    }
+    console.log(
+      `[svara] generated ${allIds.length} total ids, ${audioIds.length} audio (${audioIds.length / 7} frames). bad-band count: ${badBands}`,
+    );
+    if (badBands > 0) console.log("[svara] first bad bands:", badPositions);
+
     const pcm = await decodeSnacAll(audioIds);
+    console.log("[svara] decoded PCM samples:", pcm.length, "duration:", (pcm.length / SAMPLE_RATE).toFixed(2), "s");
     const wav = pcmFloat32ToWav(pcm, SAMPLE_RATE);
     const blob = new Blob([wav], { type: "audio/wav" });
     self.postMessage({
