@@ -182,12 +182,19 @@ self.addEventListener("message", async (e) => {
 
     const out = await lm.generate({
       inputs: inputIds,
-      max_new_tokens: 1200,
+      max_new_tokens: 2048,
       do_sample: true,
       temperature: 0.75,
       top_p: 0.9,
       top_k: 40,
-      repetition_penalty: 1.1,
+      // NB: rep penalty intentionally disabled. transformers.js applies it
+      // across ALL prior tokens (no context window), which for an audio
+      // token stream progressively penalises naturally-recurring codes
+      // (silence, voiced-region) and yields a clip that gets quieter and
+      // less articulate over time. The MLX reference uses a 20-token
+      // context window so it doesn't see this drift; the upstream Svara
+      // recipe uses 1.1 with vLLM whose impl differs. 1.0 == off.
+      repetition_penalty: 1.0,
       eos_token_id: EOS,
     });
     // out is a Tensor of shape [1, prompt_len + generated_len]
