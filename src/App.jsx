@@ -28,12 +28,20 @@ const VOICES = LANGUAGES.flatMap(([lang]) => [
   `${lang} (Male)`,
 ]);
 
+const DTYPES = [
+  { value: "q4f16", label: "q4f16 · ~1.95 GB · faster, default" },
+  { value: "q8",    label: "q8 · ~4.32 GB · higher fidelity, slower first load" },
+];
+
 export default function App() {
   const worker = useRef(null);
 
   const [selectedVoice, setSelectedVoice] = useState("Hindi (Female)");
   const [inputText, setInputText] = useState(LANGUAGES[0][1]);
+  const [dtype, setDtype] = useState("q4f16");
 
+  // status: null = booting, "loading" = downloading/compiling a model,
+  //         "ready" = idle, "running" = mid-generation
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [loadingMessage, setLoadingMessage] = useState(
@@ -50,18 +58,33 @@ export default function App() {
       switch (e.data.status) {
         case "feature-success":
           setLoadingMessage(
-            "Loading Svara LM (~2.6 GB) and SNAC codec — only downloaded once...",
+            `Loading Svara LM (q4f16, ~1.95 GB) and SNAC codec — only downloaded once...`,
           );
+          // Kick off the initial preload now that WebGPU is confirmed.
+          worker.current.postMessage({ type: "preload", dtype: "q4f16" });
           break;
         case "feature-error":
           setError(e.data.data);
+          break;
+        case "loading":
+          setLoadingMessage(
+            e.data.dtype === "q8"
+              ? "Loading q8 weights (~4.32 GB, sharded). First time can take a minute..."
+              : "Loading q4f16 weights (~1.95 GB)...",
+          );
+          setStatus("loading");
           break;
         case "ready":
           setStatus("ready");
           break;
         case "complete":
           setResults((prev) => [
-            { text: e.data.text, src: e.data.audio, voice: selectedVoice },
+            {
+              text: e.data.text,
+              src: e.data.audio,
+              voice: selectedVoice,
+              dtype: e.data.dtype,
+            },
             ...prev,
           ]);
           setStatus("ready");
@@ -89,6 +112,7 @@ export default function App() {
       type: "generate",
       text: inputText.trim(),
       speaker_id: selectedVoice,
+      dtype,
     });
   };
 
@@ -98,14 +122,23 @@ export default function App() {
     setSelectedVoice(`${lang} (Female)`);
   };
 
+  const onDtypeChange = (next) => {
+    if (next === dtype) return;
+    setDtype(next);
+    // Trigger preload so the model is hot before the user clicks Generate.
+    worker.current?.postMessage({ type: "preload", dtype: next });
+  };
+
+  const showOverlay = status === null || status === "loading";
+
   return (
     <div className="relative w-full min-h-screen bg-gradient-to-br from-gray-900 to-gray-700 flex flex-col items-center justify-center p-4 overflow-hidden font-sans">
       <motion.div
         initial={{ opacity: 1 }}
-        animate={{ opacity: status === null ? 1 : 0 }}
+        animate={{ opacity: showOverlay ? 1 : 0 }}
         transition={{ duration: 0.5 }}
         className="absolute w-screen h-screen justify-center flex flex-col items-center z-10 bg-gray-800/95 backdrop-blur-md"
-        style={{ pointerEvents: status === null ? "auto" : "none" }}
+        style={{ pointerEvents: showOverlay ? "auto" : "none" }}
       >
         <div className="w-[250px] h-[250px] border-4 border-white shadow-[0_0_0_5px_#4973ff] rounded-full overflow-hidden">
           <div className="loading-wave"></div>
@@ -182,6 +215,23 @@ export default function App() {
                 )}
               </select>
             </div>
+
+            <div className="flex items-center gap-3">
+              <label className="text-sm text-gray-400 shrink-0">Quant</label>
+              <select
+                value={dtype}
+                onChange={(e) => onDtypeChange(e.target.value)}
+                className="flex-1 bg-gray-700/50 border-2 border-gray-600 rounded-xl text-gray-100 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={status === "running"}
+              >
+                {DTYPES.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <textarea
               placeholder="Enter text in any of 19 Indian languages..."
               value={inputText}
@@ -192,9 +242,13 @@ export default function App() {
             <button
               type="submit"
               className="w-full inline-flex justify-center items-center px-6 py-2 text-lg font-semibold bg-gradient-to-t from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 transition-colors duration-300 rounded-xl text-white disabled:opacity-50"
-              disabled={status === "running" || inputText.trim() === ""}
+              disabled={status !== "ready" || inputText.trim() === ""}
             >
-              {status === "running" ? "Generating..." : "Generate"}
+              {status === "running"
+                ? "Generating..."
+                : status === "loading"
+                  ? "Loading model..."
+                  : "Generate"}
             </button>
           </form>
         </div>
@@ -210,7 +264,7 @@ export default function App() {
               <div key={i}>
                 <div className="text-white bg-gray-800/70 backdrop-blur-sm border border-gray-700 rounded-lg p-4 z-10">
                   <span className="absolute right-5 font-bold text-gray-400">
-                    {result.voice}
+                    {result.voice} · {result.dtype}
                   </span>
                   <p className="mb-3 max-w-[80%]">{result.text}</p>
                   <audio controls src={result.src} className="w-full">
