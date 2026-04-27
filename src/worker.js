@@ -15,13 +15,9 @@ import {
 } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web/webgpu";
 
-// Point ORT-Web at its WASM artefacts on a CDN. Vite's dev server doesn't
-// serve them by default and falls back to index.html, which surfaces as
-// "expected magic word 00 61 73 6d, found 3c 21 64 6f" (i.e. <!do...).
-// For a production build, copy the .wasm/.mjs files into public/ via
-// vite-plugin-static-copy and point this at "/" instead.
-ort.env.wasm.wasmPaths =
-  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/";
+// ORT-Web's .wasm/.mjs files aren't served by Vite by default; vite.config.js
+// copies them from node_modules to /ort-wasm/ via vite-plugin-static-copy.
+ort.env.wasm.wasmPaths = "/ort-wasm/";
 
 // --- WebGPU feature detection -----------------------------------------------
 let fp16_supported = false;
