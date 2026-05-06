@@ -2,7 +2,7 @@
 title: Svāra TTS WebGPU
 emoji: 🗣️
 colorFrom: yellow
-colorTo: orange
+colorTo: red
 sdk: static
 app_build_command: npm run build
 app_file: dist/index.html
