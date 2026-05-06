@@ -4,11 +4,17 @@ emoji: 🗣️
 colorFrom: yellow
 colorTo: red
 sdk: static
-app_build_command: npm run build
-app_file: dist/index.html
 pinned: false
 license: apache-2.0
 short_description: Multilingual Indic TTS in your browser, via WebGPU
+models:
+  - shreyask/svara-tts-v1-ONNX
+  - onnx-community/snac_24khz-ONNX
+tags:
+  - text-to-speech
+  - indic
+  - webgpu
+  - on-device
 ---
 
 # Svāra TTS · WebGPU
